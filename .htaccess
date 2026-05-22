@@ -1,0 +1,358 @@
+# ============================================================
+# .htaccess - تنظیمات امنیتی و عملکردی سرور Apache
+# پروژه: DownloadHub Bot - ربات دانلودر حرفه‌ای برای بله
+# ============================================================
+# 
+# این فایل وظایف زیر را بر عهده دارد:
+# 1. مسدودسازی دسترسی مستقیم به فایل‌های حساس (config.php, core/, vendor/)
+# 2. جلوگیری از لیست شدن محتویات پوشه‌ها
+# 3. تنظیم هدرهای امنیتی (CSP, X-Frame-Options, etc.)
+# 4. فشردهسازی پاسخ‌ها (Gzip/Deflate)
+# 5. کش کردن منابع استاتیک (برای بهبود عملکرد)
+# 6. مسدودسازی IPهای مخرب و User-Agentهای مشکوک
+# 7. جلوگیری از اجرای فایل‌های PHP در پوشه‌های خاص
+# 8. تنظیمات زمان اجرا برای webhook
+# 9. بازنویسی URLها (در صورت نیاز)
+# 10. محافظت در برابر حملات رایج (XSS, SQL Injection, etc.)
+# ============================================================
+
+# فعال کردن موتور بازنویسی
+RewriteEngine On
+
+# ============================================================
+# 1. امنیت پایه
+# ============================================================
+
+# جلوگیری از لیست شدن محتویات پوشه‌ها
+Options -Indexes
+
+# جلوگیری از دنبال کردن Symlink ها
+Options -FollowSymLinks
+
+# محافظت از فایل .htaccess خودش
+<Files ".htaccess">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# ============================================================
+# 2. مسدودسازی دسترسی به فایل‌های حساس
+# ============================================================
+
+# مسدودسازی دسترسی مستقیم به فایل پیکربندی
+<Files "config.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# مسدودسازی فایل‌های لاگ
+<FilesMatch "\.(log|txt|lock|json)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# مسدودسازی فایل‌های نصب و موقت
+<FilesMatch "^(install\.php|\.installed|cron\.php)$">
+    # فقط از طریق خط فرمان یا لوکال‌هاست قابل دسترسی باشند
+    # برای امنیت بیشتر، پس از نصب، install.php را حذف کنید
+    Order Allow,Deny
+    Allow from 127.0.0.1
+    Allow from ::1
+    Deny from all
+</FilesMatch>
+
+# مسدودسازی دسترسی به پوشه core (منطق اصلی)
+<IfModule mod_authz_core.c>
+    <DirectoryMatch "^.*/core/">
+        Require all denied
+    </DirectoryMatch>
+</IfModule>
+
+# مسدودسازی دسترسی به پوشه vendor (اگر از Composer استفاده شود)
+<IfModule mod_authz_core.c>
+    <DirectoryMatch "^.*/vendor/">
+        Require all denied
+    </DirectoryMatch>
+</IfModule>
+
+# مسدودسازی دسترسی به پوشه cache
+<IfModule mod_authz_core.c>
+    <DirectoryMatch "^.*/cache/">
+        Require all denied
+    </DirectoryMatch>
+</IfModule>
+
+# مسدودسازی دسترسی مستقیم به فایل‌های حساس در پوشه‌های مختلف
+<FilesMatch "\.(ini|psd|log|sh|sql|bak|backup|md|gitignore|gitattributes)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# ============================================================
+# 3. هدرهای امنیتی (Security Headers)
+# ============================================================
+
+<IfModule mod_headers.c>
+    
+    # جلوگیری از clickjacking
+    Header always append X-Frame-Options "SAMEORIGIN"
+    
+    # محافظت در برابر XSS
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    # جلوگیری از MIME type sniffing
+    Header always set X-Content-Type-Options "nosniff"
+    
+    # ارجاع دهنده (Referrer Policy)
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    
+    # Content Security Policy (سطح پایه)
+    # در صورت نیاز می‌توانید محدودتر کنید
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+    
+    # محافظت از توکن‌ها و اطلاعات حساس در کش مرورگر
+    Header always set Cache-Control "no-store, no-cache, must-revalidate, private"
+    
+    # HSTS (HTTP Strict Transport Security) - فقط برای HTTPS
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" env=HTTPS
+    
+    # Permissions-Policy (قبلاً Feature-Policy)
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    
+</IfModule>
+
+# ============================================================
+# 4. فشردهسازی (Compression)
+# ============================================================
+
+<IfModule mod_deflate.c>
+    # فشردهسازی برای انواع فایل
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/json application/xml application/rss+xml application/atom+xml
+    
+    # حذف هدرهای قدیمی
+    Header unset ETag
+    
+    # فشردهسازی فایل‌های استاتیک
+    <FilesMatch "\.(js|css|html|xml|json|txt)$">
+        SetOutputFilter DEFLATE
+    </FilesMatch>
+</IfModule>
+
+# ============================================================
+# 5. کش کردن (Caching) - برای منابع استاتیک
+# ============================================================
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    
+    # کش کردن تصاویر (1 ماه)
+    ExpiresByType image/jpeg "access plus 1 month"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/gif "access plus 1 month"
+    ExpiresByType image/webp "access plus 1 month"
+    ExpiresByType image/svg+xml "access plus 1 month"
+    
+    # کش کردن CSS و JS (1 هفته)
+    ExpiresByType text/css "access plus 1 week"
+    ExpiresByType text/javascript "access plus 1 week"
+    ExpiresByType application/javascript "access plus 1 week"
+    
+    # کش کردن فونت‌ها (1 ماه)
+    ExpiresByType font/woff "access plus 1 month"
+    ExpiresByType font/woff2 "access plus 1 month"
+    ExpiresByType application/font-woff "access plus 1 month"
+    
+    # عدم کش کردن برای فایل‌های PHP و HTML
+    ExpiresByType text/html "access plus 0 seconds"
+    ExpiresByType application/json "access plus 0 seconds"
+</IfModule>
+
+# ============================================================
+# 6. حفاظت در برابر حملات رایج
+# ============================================================
+
+# جلوگیری از User-Agentهای مخرب (بات‌های بد)
+<IfModule mod_rewrite.c>
+    RewriteCond %{HTTP_USER_AGENT} (libwww-perl|wget|python|curl|java|php|perl|ruby|scan|sqlmap) [NC]
+    RewriteRule .* - [F,L]
+</IfModule>
+
+# جلوگیری از درخواست‌های بدون User-Agent (بیشتر بات‌ها)
+<IfModule mod_rewrite.c>
+    RewriteCond %{HTTP_USER_AGENT} ^$
+    RewriteRule .* - [F,L]
+</IfModule>
+
+# جلوگیری از حملات SQL Injection (سطح پایه)
+<IfModule mod_rewrite.c>
+    RewriteCond %{QUERY_STRING} (\<|%3C).*script.*(\>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} (union|select|insert|drop|delete|update|create|alter|replace).*from.* [NC,OR]
+    RewriteCond %{QUERY_STRING} (\.\.\/|\.\.%2F) [NC,OR]
+    RewriteCond %{QUERY_STRING} (boot\.ini|etc/passwd|winnt|\.\./|\.\.%2F) [NC,OR]
+    RewriteCond %{QUERY_STRING} (goback|dblib|mosconfig|whm|sql|database|backup|password|username) [NC]
+    RewriteRule .* - [F,L]
+</IfModule>
+
+# جلوگیری از حملات XSS (سطح پایه)
+<IfModule mod_rewrite.c>
+    RewriteCond %{QUERY_STRING} (<|%3C)([^s]*s)+cript.*(>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} (javascript:).*(;|\(|\)|<|>|%3D) [NC,OR]
+    RewriteCond %{QUERY_STRING} (alert\(|confirm\(|prompt\() [NC]
+    RewriteRule .* - [F,L]
+</IfModule>
+
+# ============================================================
+# 7. تنظیمات PHP (از طریق .htaccess)
+# ============================================================
+
+<IfModule mod_php.c>
+    # حداکثر زمان اجرا برای webhook (60 ثانیه)
+    php_value max_execution_time 60
+    
+    # حداکثر حافظه مصرفی (256MB)
+    php_value memory_limit 256M
+    
+    # حداکثر حجم آپلود فایل (برای webhook - معمولاً کم است)
+    php_value post_max_size 10M
+    php_value upload_max_filesize 10M
+    
+    # نمایش خطاها (در محیط تولید غیرفعال شود)
+    php_flag display_errors Off
+    php_flag display_startup_errors Off
+    
+    # لاگ خطاها
+    php_flag log_errors On
+    php_value error_log /home/khashayar/logs/php_errors.log
+    
+    # تنظیمات session (امنیت)
+    php_flag session.use_only_cookies On
+    php_flag session.use_strict_mode On
+    php_flag session.cookie_httponly On
+    php_flag session.cookie_secure On env=HTTPS
+</IfModule>
+
+# ============================================================
+# 8. تنظیمات زمان اجرا برای PHP-FPM (اگر استفاده شود)
+# ============================================================
+
+<IfModule mod_proxy_fcgi.c>
+    # تنظیمات برای PHP-FPM
+    <FilesMatch "\.(php)$">
+        SetHandler "proxy:unix:/var/run/php/php8.1-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+</IfModule>
+
+# ============================================================
+# 9. بازنشانی URL (در صورت نیاز به مسیرهای زیبا)
+# ============================================================
+
+# اگر بخواهید به جای router.php از مسیرهای زیبا استفاده کنید
+# Redirect تمام درخواست‌ها به router.php
+<IfModule mod_rewrite.c>
+    # شرط: فایل یا پوشه وجود نداشته باشد
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    
+    # بازنویسی به router.php برای همه درخواست‌ها به جز فایل‌های استاتیک
+    RewriteRule ^(?!assets/|css/|js/|images/|favicon\.ico).*$ router.php [QSA,L]
+</IfModule>
+
+# ============================================================
+# 10. مسدودسازی IPهای مخرب (اختیاری - لیست را تکمیل کنید)
+# ============================================================
+
+<IfModule mod_authz_core.c>
+    # مسدودسازی IPهای خاص
+    <RequireAny>
+        # IPهای مجاز
+        Require all granted
+        
+        # IPهای مسدود شده (نمونه - می‌توانید اضافه کنید)
+        # Require not ip 1.2.3.4
+        # Require not ip 5.6.7.8
+    </RequireAny>
+</IfModule>
+
+# ============================================================
+# 11. حفاظت از فایل‌های پشتیبان
+# ============================================================
+
+<FilesMatch "\.(bak|backup|old|orig|save|swp|tmp|~)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# ============================================================
+# 12. حفاظت از فایل‌های Git
+# ============================================================
+
+<FilesMatch "^(\.git|\.gitignore|\.gitattributes|\.gitmodules|\.gitkeep)">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# ============================================================
+# 13. حفاظت از فایل‌های Composer
+# ============================================================
+
+<FilesMatch "^(composer\.json|composer\.lock|composer\.phar)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# ============================================================
+# 14. حفاظت از فایل‌های محیطی (env)
+# ============================================================
+
+<FilesMatch "\.(env|env\.example|env\.local|env\.production)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# ============================================================
+# 15. تنظیمات CORS (برای APIهای داخلی در صورت نیاز)
+# ============================================================
+
+# فقط در صورت نیاز به دسترسی از دامنه دیگر
+<IfModule mod_headers.c>
+    # برای admin/api.php فقط از لوکال‌هست یا دامنه خودتان
+    <FilesMatch "admin/api\.php$">
+        Header set Access-Control-Allow-Origin "https://khashayar.one"
+        Header set Access-Control-Allow-Methods "GET, POST"
+        Header set Access-Control-Allow-Headers "Content-Type, Authorization"
+    </FilesMatch>
+</IfModule>
+
+# ============================================================
+# 16. تنظیمات خطا (Error Pages)
+# ============================================================
+
+# صفحات خطای سفارشی
+ErrorDocument 400 /downloadhub/errors/400.html
+ErrorDocument 401 /downloadhub/errors/401.html
+ErrorDocument 403 /downloadhub/errors/403.html
+ErrorDocument 404 /downloadhub/errors/404.html
+ErrorDocument 500 /downloadhub/errors/500.html
+ErrorDocument 503 /downloadhub/errors/503.html
+
+# ============================================================
+# 17. جلوگیری از دسترسی به پوشه‌های temp و tmp
+# ============================================================
+
+<IfModule mod_authz_core.c>
+    <DirectoryMatch "^.*/(temp|tmp|logs|cache)/">
+        Require all denied
+    </DirectoryMatch>
+</IfModule>
+
+# ============================================================
+# 18. حداکثر حجم فایل برای آپلود (برای webhook)
+# ============================================================
+
+# این تنظیمات قبلاً در بخش PHP تنظیم شد
+# اما برای اطمینان دوباره:
+LimitRequestBody 10485760  # 10MB
+
+# ============================================================
+# پایان فایل .htaccess
+# ============================================================
